@@ -47,7 +47,7 @@ namespace ZNetCS.AspNetCore.Logging.EntityFrameworkCoreTest
         public async Task WriteSimpleCreatorLog()
         {
             var options = new DbContextOptionsBuilder<ContextSimple>()
-                .UseInMemoryDatabase("SimpleLogCreatorDatabase")
+                .UseInMemoryDatabase("SimpleLogCreatorDatabase", StartupSimpleCreator.MemoryRoot)
                 .Options;
 
             // Act
@@ -63,10 +63,10 @@ namespace ZNetCS.AspNetCore.Logging.EntityFrameworkCoreTest
                 var logs = context.Logs.ToList();
 
                 Assert.AreEqual(2, logs.Count);
-                Assert.AreEqual("Handling request.", logs.First().Message);
+                Assert.AreEqual("Handling request Test2.", logs.First().Message);
                 Assert.AreEqual("This is my custom log", logs.First().Name);
                 Assert.AreEqual(1, logs.First().EventId);
-                Assert.AreEqual("Finished handling request.", logs.Last().Message);
+                Assert.AreEqual("Finished handling request param 1.", logs.Last().Message);
                 Assert.AreEqual(2, logs.Last().EventId);
             }
         }

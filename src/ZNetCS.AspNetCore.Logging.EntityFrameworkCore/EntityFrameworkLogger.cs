@@ -114,7 +114,7 @@ namespace ZNetCS.AspNetCore.Logging.EntityFrameworkCore
     /// The type of the primary key for a log.
     /// </typeparam>
     [SuppressMessage("StyleCop.CSharp.MaintainabilityRules", "SA1402:FileMayOnlyContainASingleClass", Justification = "OK")]
-    public class EntityFrameworkLogger<TContext, TLog, TKey> : IEntityFrameworkLogger
+    public class EntityFrameworkLogger<TContext, TLog, TKey> : ILogger
         where TContext : DbContext
         where TLog : Log<TKey>
         where TKey : IEquatable<TKey>
@@ -156,19 +156,8 @@ namespace ZNetCS.AspNetCore.Logging.EntityFrameworkCore
             Func<string, LogLevel, bool> filter,
             Func<int, int, string, string, TLog> creator = null)
         {
-            if (serviceProvider == null)
-            {
-                throw new ArgumentNullException(nameof(serviceProvider));
-            }
-
-            if (filter == null)
-            {
-                throw new ArgumentNullException(nameof(filter));
-            }
-
-            this.serviceProvider = serviceProvider;
-
-            this.filter = filter;
+            this.serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
+            this.filter = filter ?? throw new ArgumentNullException(nameof(filter));
 
             this.Name = name ?? string.Empty;
             this.Creator = creator ?? this.DefaultCreator;
@@ -195,14 +184,17 @@ namespace ZNetCS.AspNetCore.Logging.EntityFrameworkCore
         #region ILogger
 
         /// <inheritdoc />
-        public virtual IDisposable BeginScope<TState>(TState state)
-        {
-            return NoopDisposable.Instance;
-        }
+        public virtual IDisposable BeginScope<TState>(TState state) => NoopDisposable.Instance;
 
         /// <inheritdoc />
         public virtual bool IsEnabled(LogLevel logLevel)
         {
+            // internal check to not log any Microsoft.EntityFrameworkCore. It won't work any way and cause StackOverflowException
+            if (this.Name.StartsWith("Microsoft.EntityFrameworkCore", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
             return (this.filter == null) || this.filter(this.Name, logLevel);
         }
 
@@ -256,15 +248,21 @@ namespace ZNetCS.AspNetCore.Logging.EntityFrameworkCore
         /// </param>
         protected virtual void WriteMessage(string message, LogLevel logLevel, int eventId)
         {
-            // create separate context for adding log
-            using (var context = ActivatorUtilities.CreateInstance<TContext>(this.serviceProvider))
+            // create separate scope for DbContextOptions and DbContext
+            using (var scope = this.serviceProvider.CreateScope())
             {
-                // create new log with resolving dependency injection
-                TLog log = this.Creator((int)logLevel, eventId, this.Name, message);
+                // create separate DbContext for adding log
+                // normally we should rely on scope context, but in rare scenarios when DbContext is
+                // registered as singleton, we should avoid this.
+                using (var context = ActivatorUtilities.CreateInstance<TContext>(scope.ServiceProvider))
+                {
+                    // create new log with resolving dependency injection
+                    TLog log = this.Creator((int)logLevel, eventId, this.Name, message);
 
-                context.Set<TLog>().Add(log);
+                    context.Set<TLog>().Add(log);
 
-                context.SaveChanges();
+                    context.SaveChanges();
+                }
             }
         }
 
@@ -285,15 +283,19 @@ namespace ZNetCS.AspNetCore.Logging.EntityFrameworkCore
         /// </param>
         private TLog DefaultCreator(int logLevel, int eventId, string logName, string message)
         {
-            var log = ActivatorUtilities.CreateInstance<TLog>(this.serviceProvider);
+            // create separate scope for Scope registered dependencies.
+            using (var scope = this.serviceProvider.CreateScope())
+            {
+                var log = ActivatorUtilities.CreateInstance<TLog>(scope.ServiceProvider);
 
-            log.TimeStamp = DateTimeOffset.Now;
-            log.Level = logLevel;
-            log.EventId = eventId;
-            log.Name = logName.Length > 255 ? logName.Substring(0, 255) : logName;
-            log.Message = message;
+                log.TimeStamp = DateTimeOffset.Now;
+                log.Level = logLevel;
+                log.EventId = eventId;
+                log.Name = logName.Length > 255 ? logName.Substring(0, 255) : logName;
+                log.Message = message;
 
-            return log;
+                return log;
+            }
         }
 
         #endregion
